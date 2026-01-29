@@ -23,6 +23,7 @@ app.post("/api/setlist/generate", async (req, res) => {
       refinement = null,
       previousSetlist = null,
       regenerate = false,
+      libraryTracks = [],
       state = {}
     } = req.body;
 
@@ -37,6 +38,7 @@ app.post("/api/setlist/generate", async (req, res) => {
       });
     }
 
+    // refinement is allowed to be short
     if (refinement != null) {
       if (typeof refinement !== "string") {
         return res.status(400).json({ error: "refinement must be a string" });
@@ -49,24 +51,31 @@ app.post("/api/setlist/generate", async (req, res) => {
       }
     }
 
+    // libraryTracks should be an array of track objects
+    if (!Array.isArray(libraryTracks)) {
+      return res.status(400).json({ error: "libraryTracks must be an array" });
+    }
+
     const result = await runAgentTurn({
       prompt: p,
       targetDurationMinutes: Number(targetDurationMinutes) || null,
       refinement,
       previousSetlist,
       regenerate: !!regenerate,
+      libraryTracks,
       state: {
         pendingPrompt: state.pendingPrompt ?? null,
         clarificationAsked: !!state.clarificationAsked,
         refinementUsed: !!state.refinementUsed,
         lastSetlist: state.lastSetlist ?? null,
-        originalPrompt: state.originalPrompt ?? null
+        originalPrompt: state.originalPrompt ?? null,
+        genre: state.genre ?? null
       }
     });
 
     return res.json(result);
   } catch (err) {
-    console.error(" Agent error:", err);
+    console.error("❌ Agent error:", err);
     return res.status(500).json({
       error: "Failed to generate setlist",
       message: err.message

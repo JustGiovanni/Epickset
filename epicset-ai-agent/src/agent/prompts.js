@@ -25,13 +25,22 @@ You generate a usable music setlist.
 
 You MUST always return a usable setlist (never empty).
 
+You will receive:
+- a user request
+- optionally a list of the user's library tracks
+
+Priority rule:
+1) Prefer songs from the user's library when they fit the request.
+2) If the library is missing suitable songs, you may include other well-known songs as external suggestions.
+
 Apply silent defaults (do NOT mention these defaults to the user):
 - ~5 songs if user didn't request a count
 - Standard structure: opening → mid → closing
-- Common neutral keys (do NOT show keys unless asked)
+- Reasonable approximate track durations if unknown
 
 Return ONLY valid JSON:
 {
+  "genre": "string",
   "tracks": [
     {
       "position": number,
@@ -47,10 +56,10 @@ Constraints:
 - Provide 3 to 6 tracks unless the user clearly asks otherwise
 - position must start at 1 and increase by 1
 - duration is in SECONDS
-- IMPORTANT: duration must be realistic for a song:
+- duration must be realistic for a song:
   - typically 150 to 330 seconds (2:30 to 5:30)
   - never below 90 seconds
-- Keep output scannable and readable
+- genre must be a short label inferred from the request (e.g., "Afrobeats", "Worship", "Hip-Hop", "Pop", "R&B", "Rock", "Jazz")
 `;
 
 export const REGENERATE_SETLIST_PROMPT = `
@@ -59,27 +68,22 @@ You generate a NEW setlist for the SAME request as before.
 IMPORTANT:
 - This is a REGENERATION. The user wants a different selection.
 - Avoid reusing tracks from the previous setlist as much as possible.
-- Keep the same overall vibe/genre/event/duration implied by the request.
-- You MUST always return a usable setlist (never empty).
+- Prefer the user's library tracks when they fit the request.
+- You MUST always return a usable setlist.
 
 Return ONLY valid JSON:
 {
+  "genre": "string",
   "tracks": [
-    {
-      "position": number,
-      "title": "string",
-      "artist": "string",
-      "duration": number
-    }
+    { "position": number, "title": "string", "artist": "string", "duration": number }
   ],
   "explanation": "string"
 }
 
 Constraints:
 - duration is in SECONDS
-- IMPORTANT: duration must be realistic for a song:
-  - typically 150 to 330 seconds (2:30 to 5:30)
-  - never below 90 seconds
+- duration must be realistic (typically 150–330, never below 90)
+- keep genre consistent with the original request
 `;
 
 export const REFINE_SETLIST_PROMPT = `
@@ -92,28 +96,21 @@ Hard rules:
 - Do NOT introduce any new clarification.
 - Update the existing setlist with MINIMAL changes.
 - Keep as many original tracks as possible unless the user explicitly wants them changed.
-- If the user says "remove X", remove ONLY that track (and re-number positions).
-- If the user says "add more songs", keep existing tracks and add a few new ones (typically +1 to +3) unless the user specifies a number.
-- If the user says "shorter", remove a few tracks but keep the opener and closer when possible.
-- If the user says "more upbeat" / "more chill", swap ONLY some middle tracks to match, keep structure.
+- If user says "remove X", remove ONLY that track.
+- If user says "add more songs", keep existing tracks and add a few (+1 to +3) unless user specifies a number.
 - Preserve the opener → mid → closer flow as much as possible.
+- Prefer user's library tracks if adding/replacing songs.
 
 Return ONLY valid JSON:
 {
+  "genre": "string",
   "tracks": [
-    {
-      "position": number,
-      "title": "string",
-      "artist": "string",
-      "duration": number
-    }
+    { "position": number, "title": "string", "artist": "string", "duration": number }
   ],
   "explanation": "string"
 }
 
 Constraints:
-- duration is in SECONDS
-- IMPORTANT: duration must be realistic for a song:
-  - typically 150 to 330 seconds (2:30 to 5:30)
-  - never below 90 seconds
+- keep genre consistent unless refinement explicitly changes it
+- duration must be realistic (typically 150–330, never below 90)
 `;
