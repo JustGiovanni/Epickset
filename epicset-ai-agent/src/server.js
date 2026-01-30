@@ -20,11 +20,18 @@ app.post("/api/setlist/generate", async (req, res) => {
     const {
       prompt,
       targetDurationMinutes = null,
+
+      // AI flow inputs:
       refinement = null,
       previousSetlist = null,
       regenerate = false,
-      libraryTracks = [],
-      state = {}
+      state = {},
+
+      // Library integration inputs:
+      userId = null,
+      libraryTracks = null, // if backend sends directly, use it; else agent will fetch
+      libraryEndpoint = process.env.LIBRARY_ENDPOINT || "http://localhost:3000/songs",
+      authToken = null // optional placeholder if /songs is protected
     } = req.body;
 
     if (typeof prompt !== "string") {
@@ -38,7 +45,6 @@ app.post("/api/setlist/generate", async (req, res) => {
       });
     }
 
-    // refinement is allowed to be short
     if (refinement != null) {
       if (typeof refinement !== "string") {
         return res.status(400).json({ error: "refinement must be a string" });
@@ -51,31 +57,37 @@ app.post("/api/setlist/generate", async (req, res) => {
       }
     }
 
-    // libraryTracks should be an array of track objects
-    if (!Array.isArray(libraryTracks)) {
-      return res.status(400).json({ error: "libraryTracks must be an array" });
+    if (libraryTracks != null && !Array.isArray(libraryTracks)) {
+      return res.status(400).json({ error: "libraryTracks must be an array or null" });
     }
 
     const result = await runAgentTurn({
       prompt: p,
       targetDurationMinutes: Number(targetDurationMinutes) || null,
+
       refinement,
       previousSetlist,
       regenerate: !!regenerate,
-      libraryTracks,
+
+      userId,
+      libraryTracks,          // may be null -> fetch
+      libraryEndpoint,
+      authToken,
+
       state: {
         pendingPrompt: state.pendingPrompt ?? null,
         clarificationAsked: !!state.clarificationAsked,
         refinementUsed: !!state.refinementUsed,
         lastSetlist: state.lastSetlist ?? null,
         originalPrompt: state.originalPrompt ?? null,
-        genre: state.genre ?? null
+        genre: state.genre ?? null,
+        setlistName: state.setlistName ?? null
       }
     });
 
     return res.json(result);
   } catch (err) {
-    console.error("❌ Agent error:", err);
+    console.error(" Agent error:", err);
     return res.status(500).json({
       error: "Failed to generate setlist",
       message: err.message

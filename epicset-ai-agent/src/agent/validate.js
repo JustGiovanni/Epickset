@@ -3,6 +3,22 @@ export function validateSetlistPayload(payload) {
     throw new Error("Invalid setlist payload.");
   }
 
+  if (!payload.setlistName || typeof payload.setlistName !== "string") {
+    throw new Error("Setlist must include setlistName (string).");
+  }
+  const name = payload.setlistName.trim();
+  if (name.length < 3 || name.length > 50) {
+    throw new Error("setlistName must be 3–50 characters.");
+  }
+
+  if (!payload.genre || typeof payload.genre !== "string") {
+    throw new Error("Setlist must include genre (string).");
+  }
+  const genre = payload.genre.trim();
+  if (genre.length < 2 || genre.length > 40) {
+    throw new Error("genre must be 2–40 characters.");
+  }
+
   const { tracks } = payload;
   if (!Array.isArray(tracks) || tracks.length === 0) {
     throw new Error("Setlist must include at least one track.");
@@ -14,6 +30,7 @@ export function validateSetlistPayload(payload) {
 
   for (let i = 0; i < tracks.length; i++) {
     const t = tracks[i];
+
     if (typeof t.position !== "number" || t.position !== i + 1) {
       throw new Error("Track positions must be ordered 1..N.");
     }
@@ -23,7 +40,7 @@ export function validateSetlistPayload(payload) {
     if (!t.artist || typeof t.artist !== "string") {
       throw new Error("Each track must have an artist.");
     }
-    if (typeof t.duration !== "number" || t.duration <= 0) {
+    if (typeof t.duration !== "number" || !Number.isFinite(t.duration) || t.duration <= 0) {
       throw new Error("Each track must have a positive duration (seconds).");
     }
   }

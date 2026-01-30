@@ -17,7 +17,7 @@ If context is insufficient, respond ONLY with valid JSON:
 Rules:
 - Ask ONLY ONE question.
 - Keep the question short and specific.
-- The question must directly improve the setlist output.
+- The question must directly improve the output.
 `;
 
 export const GENERATE_SETLIST_PROMPT = `
@@ -27,11 +27,11 @@ You MUST always return a usable setlist (never empty).
 
 You will receive:
 - a user request
-- optionally a list of the user's library tracks
+- optionally a list of the user's library songs
 
 Priority rule:
 1) Prefer songs from the user's library when they fit the request.
-2) If the library is missing suitable songs, you may include other well-known songs as external suggestions.
+2) If the library is missing suitable songs, you may include other songs as external suggestions.
 
 Apply silent defaults (do NOT mention these defaults to the user):
 - ~5 songs if user didn't request a count
@@ -40,6 +40,7 @@ Apply silent defaults (do NOT mention these defaults to the user):
 
 Return ONLY valid JSON:
 {
+  "setlistName": "string",
   "genre": "string",
   "tracks": [
     {
@@ -53,26 +54,27 @@ Return ONLY valid JSON:
 }
 
 Constraints:
-- Provide 3 to 6 tracks unless the user clearly asks otherwise
+- Provide 3 to 6 tracks unless user clearly asks otherwise
 - position must start at 1 and increase by 1
-- duration is in SECONDS
-- duration must be realistic for a song:
-  - typically 150 to 330 seconds (2:30 to 5:30)
-  - never below 90 seconds
-- genre must be a short label inferred from the request (e.g., "Afrobeats", "Worship", "Hip-Hop", "Pop", "R&B", "Rock", "Jazz")
+- duration is seconds and realistic:
+  - typically 150 to 330
+  - never below 90
+- setlistName: 3–50 chars, no emojis, clean title
+- genre: short label inferred from the request (e.g., "Afrobeats", "Worship", "Hip-Hop", "Pop", "R&B", "Rock", "Jazz")
 `;
 
 export const REGENERATE_SETLIST_PROMPT = `
 You generate a NEW setlist for the SAME request as before.
 
 IMPORTANT:
-- This is a REGENERATION. The user wants a different selection.
+- This is regeneration. Produce a different selection.
 - Avoid reusing tracks from the previous setlist as much as possible.
-- Prefer the user's library tracks when they fit the request.
+- Prefer the user's library songs when they fit the request.
 - You MUST always return a usable setlist.
 
 Return ONLY valid JSON:
 {
+  "setlistName": "string",
   "genre": "string",
   "tracks": [
     { "position": number, "title": "string", "artist": "string", "duration": number }
@@ -81,9 +83,10 @@ Return ONLY valid JSON:
 }
 
 Constraints:
-- duration is in SECONDS
-- duration must be realistic (typically 150–330, never below 90)
+- duration realistic (typically 150–330, never below 90)
 - keep genre consistent with the original request
+- setlistName should match the vibe and can change slightly
+- setlistName: 3–50 chars, no emojis
 `;
 
 export const REFINE_SETLIST_PROMPT = `
@@ -94,15 +97,16 @@ This is NOT a full regeneration.
 Hard rules:
 - Do NOT ask questions.
 - Do NOT introduce any new clarification.
-- Update the existing setlist with MINIMAL changes.
+- Update the existing setlist with minimal changes.
 - Keep as many original tracks as possible unless the user explicitly wants them changed.
 - If user says "remove X", remove ONLY that track.
 - If user says "add more songs", keep existing tracks and add a few (+1 to +3) unless user specifies a number.
-- Preserve the opener → mid → closer flow as much as possible.
-- Prefer user's library tracks if adding/replacing songs.
+- Preserve opener → mid → closer structure.
+- Prefer library songs if adding/replacing.
 
 Return ONLY valid JSON:
 {
+  "setlistName": "string",
   "genre": "string",
   "tracks": [
     { "position": number, "title": "string", "artist": "string", "duration": number }
@@ -112,5 +116,7 @@ Return ONLY valid JSON:
 
 Constraints:
 - keep genre consistent unless refinement explicitly changes it
-- duration must be realistic (typically 150–330, never below 90)
+- keep setlistName consistent unless refinement changes the concept
+- duration realistic (typically 150–330, never below 90)
+- setlistName: 3–50 chars, no emojis
 `;
