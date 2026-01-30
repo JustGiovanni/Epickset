@@ -7,11 +7,38 @@ import {
   ROUTE_DECISION_PROMPT,
   GENERATE_SETLIST_PROMPT,
   REGENERATE_SETLIST_PROMPT,
-  REFINE_SETLIST_PROMPT
+  REFINE_SETLIST_PROMPT,
 } from "./prompts.js";
 import { validateSetlistPayload } from "./validate.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+import { youtubeSearchFirstVideo } from "../services/youtube.js";
+
+async function enrichWithYoutube(setlist) {
+  if (!setlist || !setlist.tracks || !Array.isArray(setlist.tracks))
+    return setlist;
+
+  console.log(`Searching YouTube for ${setlist.tracks.length} tracks...`);
+
+  // Parallel fetch
+  await Promise.all(
+    setlist.tracks.map(async (track) => {
+      if (track.youtubeUrl) return; // already has it?
+
+      try {
+        const query = `${track.title} ${track.artist}`;
+        const video = await youtubeSearchFirstVideo(query);
+        if (video) {
+          track.youtubeUrl = `https://www.youtube.com/watch?v=${video.videoId}`;
+        }
+      } catch (err) {
+        console.error(`Failed to find video for ${track.title}:`, err.message);
+      }
+    }),
+  );
+
+  return setlist;
+}
 
 async function chatJson({ system, user, temperature = 0.4 }) {
   const resp = await openai.chat.completions.create({
@@ -19,8 +46,8 @@ async function chatJson({ system, user, temperature = 0.4 }) {
     temperature,
     messages: [
       { role: "system", content: system },
-      { role: "user", content: user }
-    ]
+      { role: "user", content: user },
+    ],
   });
 
   const text = resp.choices?.[0]?.message?.content ?? "";
@@ -28,7 +55,10 @@ async function chatJson({ system, user, temperature = 0.4 }) {
 }
 
 function normalize(s) {
-  return String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+  return String(s || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function libraryIndex(libraryTracks) {
@@ -54,7 +84,9 @@ function attachLibraryMeta(setlist, libraryTracks) {
         libraryTrackId: lib.id ?? lib.trackId ?? lib._id ?? null,
         // prefer library duration if available and sane
         duration:
-          typeof lib.duration === "number" && lib.duration > 0 ? lib.duration : t.duration
+          typeof lib.duration === "number" && lib.duration > 0
+            ? lib.duration
+            : t.duration,
       };
     }
 
@@ -66,7 +98,10 @@ function attachLibraryMeta(setlist, libraryTracks) {
 
 function computeMeta(setlist) {
   const tracks = setlist?.tracks || [];
-  const totalDurationSeconds = tracks.reduce((acc, t) => acc + (Number(t.duration) || 0), 0);
+  const totalDurationSeconds = tracks.reduce(
+    (acc, t) => acc + (Number(t.duration) || 0),
+    0,
+  );
   const totalSongs = tracks.length;
 
   const sourcesBreakdown = tracks.reduce(
@@ -75,7 +110,7 @@ function computeMeta(setlist) {
       acc[s] = (acc[s] || 0) + 1;
       return acc;
     },
-    { library: 0, external: 0 }
+    { library: 0, external: 0 },
   );
 
   return { totalSongs, totalDurationSeconds, sourcesBreakdown };
@@ -84,7 +119,7 @@ function computeMeta(setlist) {
 function titlesKey(setlist) {
   const tracks = setlist?.tracks || [];
   return new Set(
-    tracks.map((t) => `${normalize(t.title)}::${normalize(t.artist)}`)
+    tracks.map((t) => `${normalize(t.title)}::${normalize(t.artist)}`),
   );
 }
 
@@ -93,7 +128,7 @@ function formatLibraryForPrompt(libraryTracks, max = 60) {
   const sample = libraryTracks.slice(0, max).map((t) => ({
     title: t.title,
     artist: t.artist,
-    duration: t.duration
+    duration: t.duration,
   }));
   return JSON.stringify(sample, null, 2);
 }
@@ -105,7 +140,7 @@ export async function runAgentTurn({
   previousSetlist = null,
   regenerate = false,
   libraryTracks = [],
-  state
+  state,
 }) {
   const nextState = { ...state };
 
@@ -120,7 +155,7 @@ export async function runAgentTurn({
         setlist: nextState.lastSetlist || previousSetlist,
         followUp: "You can still edit manually in the app.",
         ...meta,
-        state: nextState
+        state: nextState,
       };
     }
 
@@ -141,10 +176,11 @@ USER REFINEMENT (ONE cycle max):
 
 Target duration minutes (if relevant): ${targetDurationMinutes ?? "not specified"}
 `,
-      temperature: 0.35
+      temperature: 0.35,
     });
 
     validateSetlistPayload(refined);
+    await enrichWithYoutube(refined);
 
     const enriched = attachLibraryMeta(refined, libraryTracks);
 
@@ -159,7 +195,7 @@ Target duration minutes (if relevant): ${targetDurationMinutes ?? "not specified
       setlist: enriched,
       followUp: "Want to make changes?",
       ...meta,
-      state: nextState
+      state: nextState,
     };
   }
 
@@ -187,10 +223,11 @@ ${JSON.stringify(prevKeys.slice(0, 80), null, 2)}
 If there was a previous genre, keep it consistent: ${nextState.genre || (prev?.genre ?? "unknown")}
 Generate a different setlist now.
 `,
-      temperature: 0.85
+      temperature: 0.85,
     });
 
     validateSetlistPayload(regenerated);
+    await enrichWithYoutube(regenerated);
 
     const enriched = attachLibraryMeta(regenerated, libraryTracks);
 
@@ -205,7 +242,7 @@ Generate a different setlist now.
       setlist: enriched,
       followUp: "Want to make changes?",
       ...meta,
-      state: nextState
+      state: nextState,
     };
   }
 
@@ -226,10 +263,11 @@ ${formatLibraryForPrompt(libraryTracks)}
 
 Target duration minutes: ${targetDurationMinutes ?? "not specified"}
 `,
-      temperature: 0.7
+      temperature: 0.7,
     });
 
     validateSetlistPayload(generated);
+    await enrichWithYoutube(generated);
 
     const enriched = attachLibraryMeta(generated, libraryTracks);
 
@@ -247,7 +285,7 @@ Target duration minutes: ${targetDurationMinutes ?? "not specified"}
       setlist: enriched,
       followUp: "Want to make changes?",
       ...meta,
-      state: nextState
+      state: nextState,
     };
   }
 
@@ -257,7 +295,7 @@ Target duration minutes: ${targetDurationMinutes ?? "not specified"}
   const decision = await chatJson({
     system: ROUTE_DECISION_PROMPT,
     user: `User prompt: "${prompt}"`,
-    temperature: 0
+    temperature: 0,
   });
 
   if (decision.action === "clarify") {
@@ -273,10 +311,11 @@ ${formatLibraryForPrompt(libraryTracks)}
 
 Target duration minutes: ${targetDurationMinutes ?? "not specified"}
 `,
-        temperature: 0.7
+        temperature: 0.7,
       });
 
       validateSetlistPayload(generated);
+      await enrichWithYoutube(generated);
 
       const enriched = attachLibraryMeta(generated, libraryTracks);
 
@@ -294,7 +333,7 @@ Target duration minutes: ${targetDurationMinutes ?? "not specified"}
         setlist: enriched,
         followUp: "Want to make changes?",
         ...meta,
-        state: nextState
+        state: nextState,
       };
     }
 
@@ -304,7 +343,7 @@ Target duration minutes: ${targetDurationMinutes ?? "not specified"}
     return {
       type: "clarify",
       question: decision.question || "What style or event is this setlist for?",
-      state: nextState
+      state: nextState,
     };
   }
 
@@ -322,10 +361,11 @@ ${formatLibraryForPrompt(libraryTracks)}
 
 Target duration minutes: ${targetDurationMinutes ?? "not specified"}
 `,
-    temperature: 0.7
+    temperature: 0.7,
   });
 
   validateSetlistPayload(generated);
+  await enrichWithYoutube(generated);
 
   const enriched = attachLibraryMeta(generated, libraryTracks);
 
@@ -341,6 +381,6 @@ Target duration minutes: ${targetDurationMinutes ?? "not specified"}
     setlist: enriched,
     followUp: "Want to make changes?",
     ...meta,
-    state: nextState
+    state: nextState,
   };
 }
