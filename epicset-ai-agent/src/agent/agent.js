@@ -2,43 +2,19 @@ import dotenv from "dotenv";
 dotenv.config();
 
 import OpenAI from "openai";
+import { v4 as uuidv4 } from "uuid";
+
 import { safeJsonParse } from "./json.js";
 import {
   ROUTE_DECISION_PROMPT,
   GENERATE_SETLIST_PROMPT,
   REGENERATE_SETLIST_PROMPT,
-  REFINE_SETLIST_PROMPT,
+  REFINE_SETLIST_PROMPT
 } from "./prompts.js";
 import { validateSetlistPayload } from "./validate.js";
+import { fetchUserLibrary } from "./library.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-import { youtubeSearchFirstVideo } from "../services/youtube.js";
-
-async function enrichWithYoutube(setlist) {
-  if (!setlist || !setlist.tracks || !Array.isArray(setlist.tracks))
-    return setlist;
-
-  console.log(`Searching YouTube for ${setlist.tracks.length} tracks...`);
-
-  // Parallel fetch
-  await Promise.all(
-    setlist.tracks.map(async (track) => {
-      if (track.youtubeUrl) return; // already has it?
-
-      try {
-        const query = `${track.title} ${track.artist}`;
-        const video = await youtubeSearchFirstVideo(query);
-        if (video) {
-          track.youtubeUrl = `https://www.youtube.com/watch?v=${video.videoId}`;
-        }
-      } catch (err) {
-        console.error(`Failed to find video for ${track.title}:`, err.message);
-      }
-    }),
-  );
-
-  return setlist;
-}
 
 async function chatJson({ system, user, temperature = 0.4 }) {
   const resp = await openai.chat.completions.create({
@@ -46,8 +22,8 @@ async function chatJson({ system, user, temperature = 0.4 }) {
     temperature,
     messages: [
       { role: "system", content: system },
-      { role: "user", content: user },
-    ],
+      { role: "user", content: user }
+    ]
   });
 
   const text = resp.choices?.[0]?.message?.content ?? "";
@@ -55,10 +31,7 @@ async function chatJson({ system, user, temperature = 0.4 }) {
 }
 
 function normalize(s) {
-  return String(s || "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
+  return String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function libraryIndex(libraryTracks) {
@@ -70,27 +43,89 @@ function libraryIndex(libraryTracks) {
   return idx;
 }
 
-function attachLibraryMeta(setlist, libraryTracks) {
+// Full required track shape:
+// {
+//   id, title, artist, genre, album, year, bpm, key, duration, youtubeUrl, tags, userId
+// }
+function asFullTrackShape({ base, source, libraryTrackId, userId }) {
+  return {
+    id: base?.id ?? uuidv4(),
+    title: base?.title ?? null,
+    artist: base?.artist ?? null,
+    genre: base?.genre ?? null,
+    album: base?.album ?? null,
+    year: base?.year ?? null,
+    bpm: base?.bpm ?? null,
+    key: base?.key ?? null,
+    duration: base?.duration ?? null,
+    youtubeUrl: base?.youtubeUrl ?? null,
+    tags: Array.isArray(base?.tags) ? base.tags : [],
+    userId: base?.userId ?? userId ?? null,
+
+    // integration extras
+    source: source ?? "external",
+    libraryTrackId: libraryTrackId ?? null
+  };
+}
+
+function enrichSetlistWithLibrary(setlist, libraryTracks, userId) {
   const idx = libraryIndex(libraryTracks);
 
   const enrichedTracks = (setlist.tracks || []).map((t) => {
     const key = `${normalize(t.title)}::${normalize(t.artist)}`;
     const lib = idx.get(key);
 
+    // AI minimal fields (now includes per-track genre)
+    const minimal = {
+      title: t.title,
+      artist: t.artist,
+      genre: t.genre ?? null,
+      duration: t.duration
+    };
+
     if (lib) {
+      // Copy the library song exactly, but ensure duration is sane
+      const merged = {
+        ...lib,
+        duration: typeof lib.duration === "number" && lib.duration > 0 ? lib.duration : minimal.duration
+      };
+
       return {
-        ...t,
-        source: "library",
-        libraryTrackId: lib.id ?? lib.trackId ?? lib._id ?? null,
-        // prefer library duration if available and sane
-        duration:
-          typeof lib.duration === "number" && lib.duration > 0
-            ? lib.duration
-            : t.duration,
+        position: t.position,
+        ...asFullTrackShape({
+          base: merged,
+          source: "library",
+          libraryTrackId: lib.id,
+          userId
+        })
       };
     }
 
-    return { ...t, source: "external", libraryTrackId: null };
+    // External: keep AI-provided genre if present, otherwise null
+    const externalBase = {
+      id: uuidv4(),
+      title: minimal.title,
+      artist: minimal.artist,
+      genre: minimal.genre, // <-- keep per-track genre from AI
+      album: null,
+      year: null,
+      bpm: null,
+      key: null,
+      duration: minimal.duration,
+      youtubeUrl: null,
+      tags: [],
+      userId: userId ?? null
+    };
+
+    return {
+      position: t.position,
+      ...asFullTrackShape({
+        base: externalBase,
+        source: "external",
+        libraryTrackId: null,
+        userId
+      })
+    };
   });
 
   return { ...setlist, tracks: enrichedTracks };
@@ -98,10 +133,7 @@ function attachLibraryMeta(setlist, libraryTracks) {
 
 function computeMeta(setlist) {
   const tracks = setlist?.tracks || [];
-  const totalDurationSeconds = tracks.reduce(
-    (acc, t) => acc + (Number(t.duration) || 0),
-    0,
-  );
+  const totalDurationSeconds = tracks.reduce((acc, t) => acc + (Number(t.duration) || 0), 0);
   const totalSongs = tracks.length;
 
   const sourcesBreakdown = tracks.reduce(
@@ -110,7 +142,7 @@ function computeMeta(setlist) {
       acc[s] = (acc[s] || 0) + 1;
       return acc;
     },
-    { library: 0, external: 0 },
+    { library: 0, external: 0 }
   );
 
   return { totalSongs, totalDurationSeconds, sourcesBreakdown };
@@ -118,9 +150,7 @@ function computeMeta(setlist) {
 
 function titlesKey(setlist) {
   const tracks = setlist?.tracks || [];
-  return new Set(
-    tracks.map((t) => `${normalize(t.title)}::${normalize(t.artist)}`),
-  );
+  return new Set(tracks.map((t) => `${normalize(t.title)}::${normalize(t.artist)}`));
 }
 
 function formatLibraryForPrompt(libraryTracks, max = 60) {
@@ -129,8 +159,23 @@ function formatLibraryForPrompt(libraryTracks, max = 60) {
     title: t.title,
     artist: t.artist,
     duration: t.duration,
+    genre: t.genre,
+    album: t.album,
+    year: t.year
   }));
   return JSON.stringify(sample, null, 2);
+}
+
+async function getLibraryTracksIfNeeded({ libraryTracks, libraryEndpoint, userId, authToken }) {
+  if (Array.isArray(libraryTracks)) return libraryTracks;
+
+  const fetched = await fetchUserLibrary({
+    baseUrl: libraryEndpoint,
+    userId,
+    authToken
+  });
+
+  return Array.isArray(fetched) ? fetched : [];
 }
 
 export async function runAgentTurn({
@@ -139,14 +184,24 @@ export async function runAgentTurn({
   refinement = null,
   previousSetlist = null,
   regenerate = false,
-  libraryTracks = [],
-  state,
+
+  userId = null,
+  libraryTracks = null,
+  libraryEndpoint = "http://localhost:3000/songs",
+  authToken = null,
+
+  state
 }) {
   const nextState = { ...state };
 
-  // -------------------------
+  const resolvedLibraryTracks = await getLibraryTracksIfNeeded({
+    libraryTracks,
+    libraryEndpoint,
+    userId,
+    authToken
+  });
+
   // 1) REFINEMENT (max 1)
-  // -------------------------
   if (refinement && previousSetlist) {
     if (nextState.refinementUsed) {
       const meta = computeMeta(nextState.lastSetlist || previousSetlist);
@@ -155,7 +210,7 @@ export async function runAgentTurn({
         setlist: nextState.lastSetlist || previousSetlist,
         followUp: "You can still edit manually in the app.",
         ...meta,
-        state: nextState,
+        state: nextState
       };
     }
 
@@ -165,28 +220,29 @@ export async function runAgentTurn({
 ORIGINAL REQUEST:
 "${prompt}"
 
-USER LIBRARY TRACKS (prefer these when adding/replacing):
-${formatLibraryForPrompt(libraryTracks)}
+USER LIBRARY SONGS (prefer these when adding/replacing):
+${formatLibraryForPrompt(resolvedLibraryTracks)}
 
 EXISTING SETLIST TO EDIT:
 ${JSON.stringify(previousSetlist, null, 2)}
+
+CURRENT SETLIST NAME: ${previousSetlist.setlistName || "(none)"}
 
 USER REFINEMENT (ONE cycle max):
 "${refinement}"
 
 Target duration minutes (if relevant): ${targetDurationMinutes ?? "not specified"}
 `,
-      temperature: 0.35,
+      temperature: 0.35
     });
 
     validateSetlistPayload(refined);
-    await enrichWithYoutube(refined);
 
-    const enriched = attachLibraryMeta(refined, libraryTracks);
+    const enriched = enrichSetlistWithLibrary(refined, resolvedLibraryTracks, userId);
 
     nextState.lastSetlist = enriched;
     nextState.refinementUsed = true;
-    nextState.genre = enriched.genre;
+    nextState.setlistName = enriched.setlistName;
 
     const meta = computeMeta(enriched);
 
@@ -195,13 +251,11 @@ Target duration minutes (if relevant): ${targetDurationMinutes ?? "not specified
       setlist: enriched,
       followUp: "Want to make changes?",
       ...meta,
-      state: nextState,
+      state: nextState
     };
   }
 
-  // -------------------------
   // 2) REGENERATE
-  // -------------------------
   if (regenerate) {
     const prev = nextState.lastSetlist;
     const prevKeys = prev ? Array.from(titlesKey(prev)) : [];
@@ -212,28 +266,27 @@ Target duration minutes (if relevant): ${targetDurationMinutes ?? "not specified
 USER REQUEST (same as before):
 "${prompt}"
 
-USER LIBRARY TRACKS (prefer these when relevant):
-${formatLibraryForPrompt(libraryTracks)}
+USER LIBRARY SONGS (prefer these when relevant):
+${formatLibraryForPrompt(resolvedLibraryTracks)}
 
 Target duration minutes: ${targetDurationMinutes ?? "not specified"}
 
 PREVIOUS SETLIST TRACKS (avoid reusing these if possible):
 ${JSON.stringify(prevKeys.slice(0, 80), null, 2)}
 
-If there was a previous genre, keep it consistent: ${nextState.genre || (prev?.genre ?? "unknown")}
+Previous name (keep similar vibe): ${nextState.setlistName || (prev?.setlistName ?? "unknown")}
 Generate a different setlist now.
 `,
-      temperature: 0.85,
+      temperature: 0.85
     });
 
     validateSetlistPayload(regenerated);
-    await enrichWithYoutube(regenerated);
 
-    const enriched = attachLibraryMeta(regenerated, libraryTracks);
+    const enriched = enrichSetlistWithLibrary(regenerated, resolvedLibraryTracks, userId);
 
     nextState.lastSetlist = enriched;
     nextState.refinementUsed = false;
-    nextState.genre = enriched.genre;
+    nextState.setlistName = enriched.setlistName;
 
     const meta = computeMeta(enriched);
 
@@ -242,13 +295,11 @@ Generate a different setlist now.
       setlist: enriched,
       followUp: "Want to make changes?",
       ...meta,
-      state: nextState,
+      state: nextState
     };
   }
 
-  // -------------------------
-  // 3) If clarification was asked previously, generate now
-  // -------------------------
+  // 3) Clarification follow-up -> generate immediately
   if (nextState.clarificationAsked && nextState.pendingPrompt) {
     const combinedPrompt = `${nextState.pendingPrompt}\n\nClarification answer: ${prompt}`;
 
@@ -258,25 +309,24 @@ Generate a different setlist now.
 USER REQUEST:
 "${combinedPrompt}"
 
-USER LIBRARY TRACKS (prefer these when relevant):
-${formatLibraryForPrompt(libraryTracks)}
+USER LIBRARY SONGS (prefer these when relevant):
+${formatLibraryForPrompt(resolvedLibraryTracks)}
 
 Target duration minutes: ${targetDurationMinutes ?? "not specified"}
 `,
-      temperature: 0.7,
+      temperature: 0.7
     });
 
     validateSetlistPayload(generated);
-    await enrichWithYoutube(generated);
 
-    const enriched = attachLibraryMeta(generated, libraryTracks);
+    const enriched = enrichSetlistWithLibrary(generated, resolvedLibraryTracks, userId);
 
     nextState.pendingPrompt = null;
     nextState.clarificationAsked = false;
     nextState.lastSetlist = enriched;
     nextState.refinementUsed = false;
     nextState.originalPrompt = combinedPrompt;
-    nextState.genre = enriched.genre;
+    nextState.setlistName = enriched.setlistName;
 
     const meta = computeMeta(enriched);
 
@@ -285,17 +335,15 @@ Target duration minutes: ${targetDurationMinutes ?? "not specified"}
       setlist: enriched,
       followUp: "Want to make changes?",
       ...meta,
-      state: nextState,
+      state: nextState
     };
   }
 
-  // -------------------------
   // 4) Decision: enough info?
-  // -------------------------
   const decision = await chatJson({
     system: ROUTE_DECISION_PROMPT,
     user: `User prompt: "${prompt}"`,
-    temperature: 0,
+    temperature: 0
   });
 
   if (decision.action === "clarify") {
@@ -306,25 +354,24 @@ Target duration minutes: ${targetDurationMinutes ?? "not specified"}
 USER REQUEST:
 "${prompt}"
 
-USER LIBRARY TRACKS (prefer these when relevant):
-${formatLibraryForPrompt(libraryTracks)}
+USER LIBRARY SONGS (prefer these when relevant):
+${formatLibraryForPrompt(resolvedLibraryTracks)}
 
 Target duration minutes: ${targetDurationMinutes ?? "not specified"}
 `,
-        temperature: 0.7,
+        temperature: 0.7
       });
 
       validateSetlistPayload(generated);
-      await enrichWithYoutube(generated);
 
-      const enriched = attachLibraryMeta(generated, libraryTracks);
+      const enriched = enrichSetlistWithLibrary(generated, resolvedLibraryTracks, userId);
 
       nextState.pendingPrompt = null;
       nextState.clarificationAsked = false;
       nextState.lastSetlist = enriched;
       nextState.refinementUsed = false;
       nextState.originalPrompt = prompt;
-      nextState.genre = enriched.genre;
+      nextState.setlistName = enriched.setlistName;
 
       const meta = computeMeta(enriched);
 
@@ -333,7 +380,7 @@ Target duration minutes: ${targetDurationMinutes ?? "not specified"}
         setlist: enriched,
         followUp: "Want to make changes?",
         ...meta,
-        state: nextState,
+        state: nextState
       };
     }
 
@@ -343,36 +390,33 @@ Target duration minutes: ${targetDurationMinutes ?? "not specified"}
     return {
       type: "clarify",
       question: decision.question || "What style or event is this setlist for?",
-      state: nextState,
+      state: nextState
     };
   }
 
-  // -------------------------
-  // 5) Generate
-  // -------------------------
+  // 5) Generate (first turn)
   const generated = await chatJson({
     system: GENERATE_SETLIST_PROMPT,
     user: `
 USER REQUEST:
 "${prompt}"
 
-USER LIBRARY TRACKS (prefer these when relevant):
-${formatLibraryForPrompt(libraryTracks)}
+USER LIBRARY SONGS (prefer these when relevant):
+${formatLibraryForPrompt(resolvedLibraryTracks)}
 
 Target duration minutes: ${targetDurationMinutes ?? "not specified"}
 `,
-    temperature: 0.7,
+    temperature: 0.7
   });
 
   validateSetlistPayload(generated);
-  await enrichWithYoutube(generated);
 
-  const enriched = attachLibraryMeta(generated, libraryTracks);
+  const enriched = enrichSetlistWithLibrary(generated, resolvedLibraryTracks, userId);
 
   nextState.lastSetlist = enriched;
   nextState.refinementUsed = false;
   nextState.originalPrompt = prompt;
-  nextState.genre = enriched.genre;
+  nextState.setlistName = enriched.setlistName;
 
   const meta = computeMeta(enriched);
 
@@ -381,6 +425,6 @@ Target duration minutes: ${targetDurationMinutes ?? "not specified"}
     setlist: enriched,
     followUp: "Want to make changes?",
     ...meta,
-    state: nextState,
+    state: nextState
   };
 }

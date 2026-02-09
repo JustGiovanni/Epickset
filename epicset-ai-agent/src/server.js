@@ -21,7 +21,6 @@ app.post("/api/setlist/generate", async (req, res) => {
       prompt,
       targetDurationMinutes = null,
 
-      // AI flow inputs:
       refinement = null,
       previousSetlist = null,
       regenerate = false,
@@ -70,7 +69,7 @@ app.post("/api/setlist/generate", async (req, res) => {
       regenerate: !!regenerate,
 
       userId,
-      libraryTracks,          // may be null -> fetch
+      libraryTracks,
       libraryEndpoint,
       authToken,
 
@@ -80,7 +79,6 @@ app.post("/api/setlist/generate", async (req, res) => {
         refinementUsed: !!state.refinementUsed,
         lastSetlist: state.lastSetlist ?? null,
         originalPrompt: state.originalPrompt ?? null,
-        genre: state.genre ?? null,
         setlistName: state.setlistName ?? null
       }
     });
@@ -100,6 +98,6 @@ app.use((req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(` EpicSet AI Agent running on http://localhost:${PORT}`);
+  console.log(`EpicSet AI Agent running on http://localhost:${PORT}`);
   console.log(` Health check: http://localhost:${PORT}/health`);
 });

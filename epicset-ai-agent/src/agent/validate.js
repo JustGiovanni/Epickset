@@ -11,14 +11,6 @@ export function validateSetlistPayload(payload) {
     throw new Error("setlistName must be 3–50 characters.");
   }
 
-  if (!payload.genre || typeof payload.genre !== "string") {
-    throw new Error("Setlist must include genre (string).");
-  }
-  const genre = payload.genre.trim();
-  if (genre.length < 2 || genre.length > 40) {
-    throw new Error("genre must be 2–40 characters.");
-  }
-
   const { tracks } = payload;
   if (!Array.isArray(tracks) || tracks.length === 0) {
     throw new Error("Setlist must include at least one track.");
@@ -42,6 +34,11 @@ export function validateSetlistPayload(payload) {
     }
     if (typeof t.duration !== "number" || !Number.isFinite(t.duration) || t.duration <= 0) {
       throw new Error("Each track must have a positive duration (seconds).");
+    }
+
+    // genre per track: can be string or null/undefined
+    if (t.genre != null && typeof t.genre !== "string") {
+      throw new Error("Track genre must be a string or null.");
     }
   }
 
